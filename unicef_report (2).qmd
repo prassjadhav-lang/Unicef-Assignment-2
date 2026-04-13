@@ -1,0 +1,297 @@
+---
+title: "The Silent Crisis: Youth Mortality Across the Globe"
+subtitle: "A UNICEF Data Report on Mortality Rates Among Adolescents Aged 15–19"
+author: "Prashant Jadhav"
+date: today
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-title: "Table of Contents"
+    smooth-scroll: true
+execute:
+  warning: false
+  message: false
+---
+
+## Introduction
+
+Every year, **hundreds of thousands of adolescents aged 15–19** lose their lives to preventable 
+causes — a quiet, largely overlooked crisis unfolding across the developing world. While global 
+attention often centres on infant or under-five mortality, the deaths of teenagers represent a 
+distinct and equally urgent public health failure.
+
+This report uses **UNICEF data** to examine how youth mortality rates vary across countries, 
+regions, and time — and what those patterns reveal about the unequal world we live in.
+
+> *"The death of a young person is not simply a statistic — it is a future stolen, a family 
+shattered, and a community diminished."*
+
+---
+
+## The Data
+
+The analysis draws on two UNICEF datasets:
+
+- **`unicef_indicator_2.csv`** — Mortality rates (per 1,000 youths) for adolescents aged 15–19, 
+broken down by sex, country, and year (1990–2023).
+- **`unicef_metadata.csv`** — Country-level socioeconomic metadata including GDP per capita, 
+life expectancy, birth rate, and population.
+```{python}
+#| label: setup
+#| echo: true
+
+import requests, zipfile, io, os
+import pandas as pd
+import numpy as np
+import geopandas as gpd
+from plotnine import *
+import warnings
+warnings.filterwarnings("ignore")
+
+indicator = pd.read_csv("unicef_indicator_2.csv")
+metadata  = pd.read_csv("unicef_metadata.csv")
+
+ind_total = indicator[indicator["sex"] == "Total"].copy()
+ind_total["time_period"] = ind_total["time_period"].astype(int)
+```
+
+---
+
+## 1. World Map — Youth Mortality at a Glance
+
+The map below shows the **most recent available mortality rate** for each country. 
+Darker shades indicate **higher mortality** — a stark visual reminder of geographic inequality.
+
+Sub-Saharan Africa and parts of South Asia carry a *disproportionate burden* of youth mortality, 
+while high-income countries in Europe and North America show rates close to zero.
+```{python}
+#| label: world-map
+#| fig-cap: "Figure 1: Most recent youth mortality rate (per 1,000) by country"
+#| echo: true
+
+url = "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip"
+r = requests.get(url)
+z = zipfile.ZipFile(io.BytesIO(r.content))
+z.extractall("/tmp/ne_countries")
+
+world = gpd.read_file("/tmp/ne_countries/ne_110m_admin_0_countries.shp")
+
+latest = (
+    ind_total
+    .sort_values("time_period", ascending=False)
+    .groupby("alpha_3_code", as_index=False)
+    .first()
+)[["alpha_3_code", "obs_value", "country"]]
+latest.columns = ["iso_a3", "mortality_rate", "country"]
+
+world_merged = world.merge(latest, left_on="ADM0_A3", right_on="iso_a3", how="left")
+
+(
+    ggplot(world_merged)
+    + geom_map(aes(fill="mortality_rate"), color="white", size=0.15)
+    + scale_fill_gradient(
+        low      = "#fee8c8",
+        high     = "#b30000",
+        na_value = "#cccccc",
+        name     = "Deaths per\n1,000 youths"
+    )
+    + coord_equal()
+    + labs(
+        title    = "Youth Mortality Rate (Age 15–19) — Most Recent Year",
+        subtitle = "Darker red = higher mortality  |  Grey = no data available",
+        caption  = "Source: UNICEF Indicator Dataset"
+    )
+    + theme_void()
+    + theme(
+        plot_title      = element_text(size=14, face="bold"),
+        plot_subtitle   = element_text(size=10, color="#555555"),
+        legend_position = "right"
+    )
+)
+```
+
+---
+
+## 2. Bar Chart — The 15 Countries with Highest Youth Mortality
+
+Not all countries are equal when it comes to protecting their young people. The chart below 
+highlights the **15 nations with the highest average youth mortality rates** over the most 
+recent five years of available data.
+
+Several of the most-affected countries are *conflict-affected states* or nations with 
+**severe poverty**, demonstrating the tight link between political instability and child welfare.
+```{python}
+#| label: bar-chart
+#| fig-cap: "Figure 2: Top 15 countries by average youth mortality rate (most recent 5 years)"
+#| echo: true
+
+max_year = ind_total["time_period"].max()
+recent_5 = ind_total[ind_total["time_period"] >= max_year - 4]
+
+top15 = (
+    recent_5
+    .groupby("country", as_index=False)["obs_value"]
+    .mean()
+    .sort_values("obs_value", ascending=False)
+    .head(15)
+)
+
+top15["country"] = pd.Categorical(
+    top15["country"],
+    categories = top15.sort_values("obs_value")["country"].tolist(),
+    ordered    = True
+)
+
+(
+    ggplot(top15, aes(x="country", y="obs_value", fill="obs_value"))
+    + geom_col()
+    + coord_flip()
+    + scale_fill_gradient(low="#fc8d59", high="#b30000")
+    + guides(fill=False)
+    + geom_text(
+        aes(label="obs_value.round(1).astype(str)"),
+        ha="left", nudge_y=0.3, size=8, color="#333333"
+    )
+    + labs(
+        title    = "Top 15 Countries: Highest Youth Mortality Rates",
+        subtitle = f"Average mortality per 1,000 adolescents aged 15–19 ({max_year-4}–{max_year})",
+        x="Country", y="Avg. Mortality Rate (per 1,000)",
+        caption  = "Source: UNICEF Indicator Dataset"
+    )
+    + theme_minimal()
+    + theme(
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=9, color="#555555"),
+        axis_text_y=element_text(size=9),
+        panel_grid_minor=element_blank()
+    )
+)
+```
+
+---
+
+## 3. Scatterplot — Does Wealth Protect Young Lives?
+
+The scatterplot below plots each country's **GDP per capita** against its **youth mortality rate**, 
+with a regression line showing the overall trend.
+
+The regression line confirms a strong **negative relationship** — as GDP per capita rises, 
+youth mortality falls sharply. This underscores the need to address *economic inequality* 
+as a root cause of preventable youth deaths.
+```{python}
+#| label: scatterplot
+#| fig-cap: "Figure 3: GDP per capita vs youth mortality rate with linear regression line"
+#| echo: true
+
+latest_mortality = (
+    ind_total
+    .sort_values("time_period", ascending=False)
+    .groupby("alpha_3_code", as_index=False)
+    .first()
+)[["alpha_3_code", "obs_value", "country"]]
+
+gdp_latest = (
+    metadata
+    .dropna(subset=["GDP per capita (constant 2015 US$)"])
+    .sort_values("year", ascending=False)
+    .groupby("alpha_3_code", as_index=False)
+    .first()
+)[["alpha_3_code", "GDP per capita (constant 2015 US$)"]]
+gdp_latest.columns = ["alpha_3_code", "gdp_per_capita"]
+
+scatter_df = latest_mortality.merge(gdp_latest, on="alpha_3_code", how="inner")
+scatter_df  = scatter_df.dropna(subset=["gdp_per_capita", "obs_value"])
+scatter_df["log_gdp"] = np.log10(scatter_df["gdp_per_capita"])
+
+(
+    ggplot(scatter_df, aes(x="log_gdp", y="obs_value"))
+    + geom_point(aes(color="obs_value"), alpha=0.75, size=2.5)
+    + geom_smooth(method="lm", color="#b30000", se=True, size=1)
+    + scale_color_gradient(low="#fdbb84", high="#7f0000", name="Mortality\nRate")
+    + labs(
+        title    = "Wealth vs Youth Mortality: A Clear Inverse Relationship",
+        subtitle = "Each dot = one country | X-axis is log-scaled GDP per capita (constant 2015 USD)",
+        x="Log GDP per Capita (USD)", y="Youth Mortality Rate (per 1,000)",
+        caption  = "Source: UNICEF Indicator & Metadata Datasets"
+    )
+    + theme_minimal()
+    + theme(
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=9, color="#555555"),
+        panel_grid_minor=element_blank()
+    )
+)
+```
+
+---
+
+## 4. Time-Series — Progress Over Time
+
+The final chart tracks **global progress** in reducing youth mortality from 1990 to 2023, 
+showing trends separately for **male** and **female** adolescents.
+
+While there has been meaningful *progress since 1990*, male adolescent mortality consistently 
+exceeds female mortality — a gap that reflects higher exposure of young men to:
+
+- **Violence and conflict**
+- **Road traffic accidents**  
+- **Risk-taking behaviour**
+```{python}
+#| label: time-series
+#| fig-cap: "Figure 4: Global average youth mortality rate trend by sex (1990–2023)"
+#| echo: true
+
+ts_data = indicator[indicator["sex"].isin(["Male", "Female"])].copy()
+ts_data["time_period"] = ts_data["time_period"].astype(int)
+
+ts_avg = (
+    ts_data
+    .groupby(["time_period", "sex"], as_index=False)["obs_value"]
+    .mean()
+)
+
+(
+    ggplot(ts_avg, aes(x="time_period", y="obs_value", color="sex", group="sex"))
+    + geom_line(size=1.2)
+    + geom_point(size=1.8, alpha=0.7)
+    + scale_color_manual(
+        values={"Male": "#b30000", "Female": "#1f78b4"},
+        name="Sex"
+    )
+    + scale_x_continuous(breaks=list(range(1990, 2025, 5)))
+    + labs(
+        title    = "Global Youth Mortality Trend (1990–2023)",
+        subtitle = "Global average deaths per 1,000 adolescents aged 15–19, by sex",
+        x="Year", y="Average Mortality Rate (per 1,000)",
+        caption  = "Source: UNICEF Indicator Dataset"
+    )
+    + theme_minimal()
+    + theme(
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=9, color="#555555"),
+        panel_grid_minor=element_blank(),
+        legend_position="top"
+    )
+)
+```
+
+---
+
+## Conclusion
+
+The data tells a clear and urgent story:
+
+- **Where you are born** largely determines your chances of surviving adolescence
+- **Economic development** is one of the strongest protectors of young lives
+- **Progress has been made**, but it is uneven and insufficient
+- **Young men** face systematically higher mortality risks than young women
+
+UNICEF and its partners must continue to direct resources toward the nations where adolescent 
+mortality remains tragically high.
+
+---
+*Report prepared using UNICEF open data. Visualisations created with **plotnine** in Python/Quarto.*
